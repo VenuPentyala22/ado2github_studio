@@ -1,0 +1,432 @@
+name: CI
+on:
+  workflow_call:
+    inputs:
+      buildConfiguration:
+        type: string
+        description: Build configuration
+        default: Release
+permissions:
+  contents: read
+env:
+  VMIMAGE: ubuntu-latest
+  SOURCEARTIFACTNAME: BuildOutput
+  RELEASEARTIFACTNAME: ReleasePackage
+  RELEASEDIRECTORY: ${{ github.workspace }}/release
+  SYSTEM_DEBUG: 'false'
+  BUILDCONFIGURATION: ${{ github.event_name != 'workflow_dispatch' && 'Release' || inputs.buildConfiguration }}
+jobs:
+  Validate_Validate_Source:
+    name: Validate source, templates, and policy markers
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 1
+        persist-credentials: false
+      env:
+        TESTRESULTSDIRECTORY: ${{ runner.temp }}/test-results
+    - name: Validate required files and reject obvious secrets
+      run: |-
+        set -euo pipefail
+        required_files=(
+          "azure-pipelines.yml"
+          "templates/stages/ci.yml"
+          "templates/stages/deploy.yml"
+          "templates/jobs/build.yml"
+        )
+
+        for file in "${required_files[@]}"; do
+          test -f "$file" || { echo "Missing required pipeline file: $file"; exit 1; }
+        done
+
+        credential_pattern=$(cat <<'REGEX'
+        (password|secret|token)[[:space:]]*[:=][[:space:]]*["'][^$({][^"']+
+        REGEX
+        )
+
+        if grep -RInE --exclude-dir=.git --exclude='*.md' "$credential_pattern" .; then
+          echo "Potential hard-coded credential detected."
+          exit 1
+        fi
+
+        echo "Source and policy-marker validation passed."
+      shell: bash
+      env:
+        TESTRESULTSDIRECTORY: ${{ runner.temp }}/test-results
+  Build_Build_Candidate:
+    name: Restore, compile, and stage candidate
+    needs:
+    - Validate_Validate_Source
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+        persist-credentials: false
+      env:
+        TESTRESULTSDIRECTORY: ${{ runner.temp }}/test-results
+    - name: Fetch generated reusable actions
+      uses: actions/checkout@v4
+      with:
+        repository: ${{ github.repository }}
+        ref: ${{ github.workflow_sha }}
+        path: .ado2gha-generated-4290d6a7f645
+        sparse-checkout: .github/actions
+        persist-credentials: false
+    - name: Inspect available build toolchain
+      uses: ./.ado2gha-generated-4290d6a7f645/.github/actions/ado2gha-setup-toolchain-9ecfb683f0ad
+      env:
+        TESTRESULTSDIRECTORY: ${{ runner.temp }}/test-results
+    - name: Build application
+      run: |-
+        set -euo pipefail
+
+        if compgen -G "*.sln" > /dev/null; then
+          dotnet restore
+          dotnet build --configuration "${BUILDCONFIGURATION}" --no-restore
+        elif [ -f package-lock.json ]; then
+          npm ci
+          npm run build --if-present
+        elif [ -f package.json ]; then
+          npm install
+          npm run build --if-present
+        elif [ -x scripts/build.sh ]; then
+          scripts/build.sh
+        else
+          echo "No recognized build entry point found; packaging the repository as the candidate."
+        fi
+      shell: bash
+      env:
+        TESTRESULTSDIRECTORY: ${{ runner.temp }}/test-results
+    - name: Create immutable candidate directory
+      run: |-
+        set -euo pipefail
+        out="${{ runner.temp }}/staging/candidate"
+        mkdir -p "$out"
+        tar --exclude=.git --exclude="${{ runner.temp }}/staging" -cf - . | tar -xf - -C "$out"
+        printf '%s\n' "${GITHUB_SHA}" > "$out/COMMIT_SHA"
+        printf '%s\n' "${GITHUB_RUN_NUMBER}" > "$out/BUILD_NUMBER"
+      shell: bash
+      env:
+        TESTRESULTSDIRECTORY: ${{ runner.temp }}/test-results
+    - name: Publish build output
+      uses: actions/upload-artifact@v4
+      with:
+        name: BuildOutput
+        path: ${{ runner.temp }}/staging/candidate
+        if-no-files-found: error
+      env:
+        TESTRESULTSDIRECTORY: ${{ runner.temp }}/test-results
+  Tests_Unit_Tests:
+    name: Unit tests
+    needs:
+    - Build_Build_Candidate
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      checks: write
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 1
+        persist-credentials: false
+      env:
+        TESTRESULTSDIRECTORY: ${{ runner.temp }}/test-results
+    - name: Fetch generated reusable actions
+      uses: actions/checkout@v4
+      with:
+        repository: ${{ github.repository }}
+        ref: ${{ github.workflow_sha }}
+        path: .ado2gha-generated-4290d6a7f645
+        sparse-checkout: .github/actions
+        persist-credentials: false
+    - name: Inspect available build toolchain
+      uses: ./.ado2gha-generated-4290d6a7f645/.github/actions/ado2gha-setup-toolchain-9ecfb683f0ad
+      env:
+        TESTRESULTSDIRECTORY: ${{ runner.temp }}/test-results
+    - name: Prepare test result directory
+      run: |-
+        set -euo pipefail
+        mkdir -p "${TESTRESULTSDIRECTORY}"
+      shell: bash
+      env:
+        TESTRESULTSDIRECTORY: ${{ runner.temp }}/test-results
+    - name: Execute Unit tests
+      run: |-
+        if compgen -G "*.sln" > /dev/null; then
+          dotnet test --configuration "${BUILDCONFIGURATION}" --filter "Category=Unit" --logger "trx;LogFileName=unit.trx" --results-directory "${TESTRESULTSDIRECTORY}"
+        elif [ -f package.json ]; then
+          npm test -- --runInBand
+        else
+          echo "No unit-test framework detected; configure the Unit_Tests command in templates/stages/ci.yml."
+        fi
+      shell: bash
+      env:
+        TESTRESULTSDIRECTORY: ${{ runner.temp }}/test-results
+    - name: Publish Unit tests results
+      if: ${{ !cancelled() }}
+      uses: dorny/test-reporter@v1
+      with:
+        name: Unit tests
+        path: ${{ env.TESTRESULTSDIRECTORY }}/**/*.trx
+        reporter: dotnet-trx
+        fail-on-error: 'false'
+      env:
+        TESTRESULTSDIRECTORY: ${{ runner.temp }}/test-results
+  Tests_Integration_Tests:
+    name: Integration tests
+    needs:
+    - Build_Build_Candidate
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      checks: write
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 1
+        persist-credentials: false
+      env:
+        TESTRESULTSDIRECTORY: ${{ runner.temp }}/test-results
+    - name: Fetch generated reusable actions
+      uses: actions/checkout@v4
+      with:
+        repository: ${{ github.repository }}
+        ref: ${{ github.workflow_sha }}
+        path: .ado2gha-generated-4290d6a7f645
+        sparse-checkout: .github/actions
+        persist-credentials: false
+    - name: Inspect available build toolchain
+      uses: ./.ado2gha-generated-4290d6a7f645/.github/actions/ado2gha-setup-toolchain-9ecfb683f0ad
+      env:
+        TESTRESULTSDIRECTORY: ${{ runner.temp }}/test-results
+    - name: Prepare test result directory
+      run: |-
+        set -euo pipefail
+        mkdir -p "${TESTRESULTSDIRECTORY}"
+      shell: bash
+      env:
+        TESTRESULTSDIRECTORY: ${{ runner.temp }}/test-results
+    - name: Execute Integration tests
+      run: |-
+        if [ -x scripts/test-integration.sh ]; then
+          scripts/test-integration.sh
+        else
+          echo "No integration test script found; add scripts/test-integration.sh."
+        fi
+      shell: bash
+      env:
+        TESTRESULTSDIRECTORY: ${{ runner.temp }}/test-results
+    - name: Publish Integration tests results
+      if: ${{ !cancelled() }}
+      uses: dorny/test-reporter@v1
+      with:
+        name: Integration tests
+        path: ${{ env.TESTRESULTSDIRECTORY }}/**/*.trx
+        reporter: dotnet-trx
+        fail-on-error: 'false'
+      env:
+        TESTRESULTSDIRECTORY: ${{ runner.temp }}/test-results
+  Tests_Contract_Tests:
+    name: Contract tests
+    needs:
+    - Build_Build_Candidate
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      checks: write
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 1
+        persist-credentials: false
+      env:
+        TESTRESULTSDIRECTORY: ${{ runner.temp }}/test-results
+    - name: Fetch generated reusable actions
+      uses: actions/checkout@v4
+      with:
+        repository: ${{ github.repository }}
+        ref: ${{ github.workflow_sha }}
+        path: .ado2gha-generated-4290d6a7f645
+        sparse-checkout: .github/actions
+        persist-credentials: false
+    - name: Inspect available build toolchain
+      uses: ./.ado2gha-generated-4290d6a7f645/.github/actions/ado2gha-setup-toolchain-9ecfb683f0ad
+      env:
+        TESTRESULTSDIRECTORY: ${{ runner.temp }}/test-results
+    - name: Prepare test result directory
+      run: |-
+        set -euo pipefail
+        mkdir -p "${TESTRESULTSDIRECTORY}"
+      shell: bash
+      env:
+        TESTRESULTSDIRECTORY: ${{ runner.temp }}/test-results
+    - name: Execute Contract tests
+      run: |-
+        if [ -x scripts/test-contract.sh ]; then
+          scripts/test-contract.sh
+        else
+          echo "No contract test script found; add scripts/test-contract.sh."
+        fi
+      shell: bash
+      env:
+        TESTRESULTSDIRECTORY: ${{ runner.temp }}/test-results
+    - name: Publish Contract tests results
+      if: ${{ !cancelled() }}
+      uses: dorny/test-reporter@v1
+      with:
+        name: Contract tests
+        path: ${{ env.TESTRESULTSDIRECTORY }}/**/*.trx
+        reporter: dotnet-trx
+        fail-on-error: 'false'
+      env:
+        TESTRESULTSDIRECTORY: ${{ runner.temp }}/test-results
+  Tests_Test_Result_Gate:
+    name: Fan-in test result gate
+    needs:
+    - Build_Build_Candidate
+    - Tests_Unit_Tests
+    - Tests_Integration_Tests
+    - Tests_Contract_Tests
+    if: ${{ success() && success() }}
+    runs-on: ubuntu-latest
+    steps:
+    - name: Enforce all test dependencies
+      run: |-
+        set -euo pipefail
+        echo "All dependent test jobs completed successfully."
+      shell: bash
+      env:
+        TESTRESULTSDIRECTORY: ${{ runner.temp }}/test-results
+  Security_Scan_Dependency_Audit:
+    name: Dependency vulnerability audit
+    needs:
+    - Build_Build_Candidate
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 1
+        persist-credentials: false
+      env:
+        TESTRESULTSDIRECTORY: ${{ runner.temp }}/test-results
+    - name: Fetch generated reusable actions
+      uses: actions/checkout@v4
+      with:
+        repository: ${{ github.repository }}
+        ref: ${{ github.workflow_sha }}
+        path: .ado2gha-generated-4290d6a7f645
+        sparse-checkout: .github/actions
+        persist-credentials: false
+    - name: Inspect available build toolchain
+      uses: ./.ado2gha-generated-4290d6a7f645/.github/actions/ado2gha-setup-toolchain-9ecfb683f0ad
+      env:
+        TESTRESULTSDIRECTORY: ${{ runner.temp }}/test-results
+    - name: Reject high and critical dependency findings
+      run: |-
+        set -euo pipefail
+
+        if [ -f package-lock.json ]; then
+          npm ci
+          npm audit --audit-level=high
+        fi
+
+        if compgen -G "*.sln" > /dev/null; then
+          report="${RUNNER_TEMP}/dotnet-vulnerabilities.txt"
+          dotnet list package --vulnerable --include-transitive | tee "$report"
+          if grep -Eiq '(High|Critical)' "$report"; then
+            echo "High or critical .NET vulnerability detected."
+            exit 1
+          fi
+        fi
+
+        echo "Dependency audit completed."
+      shell: bash
+      env:
+        TESTRESULTSDIRECTORY: ${{ runner.temp }}/test-results
+  Security_Scan_Source_Security_Gate:
+    name: Source and credential security gate
+    needs:
+    - Build_Build_Candidate
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+        persist-credentials: false
+      env:
+        TESTRESULTSDIRECTORY: ${{ runner.temp }}/test-results
+    - name: Scan tracked source for credential patterns
+      run: |-
+        set -euo pipefail
+        findings="${RUNNER_TEMP}/credential-findings.txt"
+
+        credential_pattern=$(cat <<'REGEX'
+        (AKIA[0-9A-Z]{16}|-----BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY-----|password[[:space:]]*[:=][[:space:]]*["'][^$({][^"']+)
+        REGEX
+        )
+
+        grep -RInE --exclude-dir=.git --exclude='*.md' "$credential_pattern" . > "$findings" || true
+
+        if [ -s "$findings" ]; then
+          cat "$findings"
+          echo "Credential-like material found in source."
+          exit 1
+        fi
+
+        echo "Credential scan completed with no findings."
+      shell: bash
+      env:
+        TESTRESULTSDIRECTORY: ${{ runner.temp }}/test-results
+  Package_Package_Release:
+    name: Create checksummed release package
+    needs:
+    - Tests_Unit_Tests
+    - Tests_Integration_Tests
+    - Tests_Contract_Tests
+    - Tests_Test_Result_Gate
+    - Security_Scan_Dependency_Audit
+    - Security_Scan_Source_Security_Gate
+    runs-on: ubuntu-latest
+    steps:
+    - name: Download immutable build output
+      uses: actions/download-artifact@v4
+      with:
+        name: BuildOutput
+        path: ${{ github.workspace }}/candidate
+      env:
+        TESTRESULTSDIRECTORY: ${{ runner.temp }}/test-results
+    - name: Archive candidate and generate integrity manifest
+      run: |-
+        set -euo pipefail
+        release="${{ runner.temp }}/staging/release"
+        mkdir -p "$release"
+
+        tar -C "${GITHUB_WORKSPACE}/candidate" \
+          -czf "$release/critical-app-${GITHUB_RUN_NUMBER}.tar.gz" .
+
+        (
+          cd "$release"
+          sha256sum ./*.tar.gz > SHA256SUMS
+        )
+
+        cat > "$release/release-metadata.json" <<JSON
+        {
+          "buildNumber": "${GITHUB_RUN_NUMBER}",
+          "commit": "${GITHUB_SHA}",
+          "branch": "${GITHUB_REF}",
+          "createdUtc": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+        }
+        JSON
+      shell: bash
+      env:
+        TESTRESULTSDIRECTORY: ${{ runner.temp }}/test-results
+    - name: Publish release package
+      uses: actions/upload-artifact@v4
+      with:
+        name: ReleasePackage
+        path: ${{ runner.temp }}/staging/release
+        if-no-files-found: error
+      env:
+        TESTRESULTSDIRECTORY: ${{ runner.temp }}/test-results
