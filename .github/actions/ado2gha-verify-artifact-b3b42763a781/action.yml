@@ -1,0 +1,14 @@
+name: Migrated verify-artifact
+description: Reviewed component from Azure DevOps template templates/steps/verify-artifact.yml
+runs:
+  using: composite
+  steps:
+  - run: |-
+      set -euo pipefail
+      cd "${RELEASEDIRECTORY}"
+      test -f SHA256SUMS || { echo "Missing SHA256SUMS."; exit 1; }
+      test -f release-metadata.json || { echo "Missing release metadata."; exit 1; }
+      sha256sum --check SHA256SUMS
+      echo "Release artifact integrity verified."
+    shell: bash
+    id: execute
