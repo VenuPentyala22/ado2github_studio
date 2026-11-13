@@ -1,0 +1,53 @@
+name: Migrated job Validate_Validate_Source
+on:
+  workflow_call:
+    inputs:
+      ado_inputs:
+        type: string
+        required: true
+jobs:
+  Validate_Validate_Source:
+    name: Validate source, templates, and policy markers
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 1
+        persist-credentials: false
+      env:
+        TESTRESULTSDIRECTORY: ${{ runner.temp }}/test-results
+    - name: Validate required files and reject obvious secrets
+      run: |-
+        set -euo pipefail
+        required_files=(
+          "azure-pipelines.yml"
+          "templates/stages/ci.yml"
+          "templates/stages/deploy.yml"
+          "templates/jobs/build.yml"
+        )
+
+        for file in "${required_files[@]}"; do
+          test -f "$file" || { echo "Missing required pipeline file: $file"; exit 1; }
+        done
+
+        credential_pattern=$(cat <<'REGEX'
+        (password|secret|token)[[:space:]]*[:=][[:space:]]*["'][^$({][^"']+
+        REGEX
+        )
+
+        if grep -RInE --exclude-dir=.git --exclude='*.md' "$credential_pattern" .; then
+          echo "Potential hard-coded credential detected."
+          exit 1
+        fi
+
+        echo "Source and policy-marker validation passed."
+      shell: bash
+      env:
+        TESTRESULTSDIRECTORY: ${{ runner.temp }}/test-results
+env:
+  VMIMAGE: ubuntu-latest
+  SOURCEARTIFACTNAME: BuildOutput
+  RELEASEARTIFACTNAME: ReleasePackage
+  RELEASEDIRECTORY: ${{ github.workspace }}/release
+  SYSTEM_DEBUG: 'false'
+  BUILDCONFIGURATION: ${{ github.event_name != 'workflow_dispatch' && 'Release' || fromJSON(inputs.ado_inputs).buildConfiguration }}

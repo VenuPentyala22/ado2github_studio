@@ -1,0 +1,47 @@
+name: Migrated job Security_Scan_Source_Security_Gate
+on:
+  workflow_call:
+    inputs:
+      ado_inputs:
+        type: string
+        required: true
+jobs:
+  Security_Scan_Source_Security_Gate:
+    name: Source and credential security gate
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+        persist-credentials: false
+      env:
+        TESTRESULTSDIRECTORY: ${{ runner.temp }}/test-results
+    - name: Scan tracked source for credential patterns
+      run: |-
+        set -euo pipefail
+        findings="${RUNNER_TEMP}/credential-findings.txt"
+
+        credential_pattern=$(cat <<'REGEX'
+        (AKIA[0-9A-Z]{16}|-----BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY-----|password[[:space:]]*[:=][[:space:]]*["'][^$({][^"']+)
+        REGEX
+        )
+
+        grep -RInE --exclude-dir=.git --exclude='*.md' "$credential_pattern" . > "$findings" || true
+
+        if [ -s "$findings" ]; then
+          cat "$findings"
+          echo "Credential-like material found in source."
+          exit 1
+        fi
+
+        echo "Credential scan completed with no findings."
+      shell: bash
+      env:
+        TESTRESULTSDIRECTORY: ${{ runner.temp }}/test-results
+env:
+  VMIMAGE: ubuntu-latest
+  SOURCEARTIFACTNAME: BuildOutput
+  RELEASEARTIFACTNAME: ReleasePackage
+  RELEASEDIRECTORY: ${{ github.workspace }}/release
+  SYSTEM_DEBUG: 'false'
+  BUILDCONFIGURATION: ${{ github.event_name != 'workflow_dispatch' && 'Release' || fromJSON(inputs.ado_inputs).buildConfiguration }}

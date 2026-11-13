@@ -1,0 +1,59 @@
+name: Migrated job Package_Package_Release
+on:
+  workflow_call:
+    inputs:
+      ado_inputs:
+        type: string
+        required: true
+jobs:
+  Package_Package_Release:
+    name: Create checksummed release package
+    runs-on: ubuntu-latest
+    steps:
+    - name: Download immutable build output
+      uses: actions/download-artifact@v4
+      with:
+        name: BuildOutput
+        path: ${{ github.workspace }}/candidate
+      env:
+        TESTRESULTSDIRECTORY: ${{ runner.temp }}/test-results
+    - name: Archive candidate and generate integrity manifest
+      run: |-
+        set -euo pipefail
+        release="${{ runner.temp }}/staging/release"
+        mkdir -p "$release"
+
+        tar -C "${GITHUB_WORKSPACE}/candidate" \
+          -czf "$release/critical-app-${GITHUB_RUN_NUMBER}.tar.gz" .
+
+        (
+          cd "$release"
+          sha256sum ./*.tar.gz > SHA256SUMS
+        )
+
+        cat > "$release/release-metadata.json" <<JSON
+        {
+          "buildNumber": "${GITHUB_RUN_NUMBER}",
+          "commit": "${GITHUB_SHA}",
+          "branch": "${GITHUB_REF}",
+          "createdUtc": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+        }
+        JSON
+      shell: bash
+      env:
+        TESTRESULTSDIRECTORY: ${{ runner.temp }}/test-results
+    - name: Publish release package
+      uses: actions/upload-artifact@v4
+      with:
+        name: ReleasePackage
+        path: ${{ runner.temp }}/staging/release
+        if-no-files-found: error
+      env:
+        TESTRESULTSDIRECTORY: ${{ runner.temp }}/test-results
+env:
+  VMIMAGE: ubuntu-latest
+  SOURCEARTIFACTNAME: BuildOutput
+  RELEASEARTIFACTNAME: ReleasePackage
+  RELEASEDIRECTORY: ${{ github.workspace }}/release
+  SYSTEM_DEBUG: 'false'
+  BUILDCONFIGURATION: ${{ github.event_name != 'workflow_dispatch' && 'Release' || fromJSON(inputs.ado_inputs).buildConfiguration }}

@@ -1,0 +1,67 @@
+name: Migrated job Tests_Integration_Tests
+on:
+  workflow_call:
+    inputs:
+      ado_inputs:
+        type: string
+        required: true
+jobs:
+  Tests_Integration_Tests:
+    name: Integration tests
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      checks: write
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 1
+        persist-credentials: false
+      env:
+        TESTRESULTSDIRECTORY: ${{ runner.temp }}/test-results
+    - name: Fetch generated reusable actions
+      uses: actions/checkout@v4
+      with:
+        repository: ${{ github.repository }}
+        ref: ${{ github.workflow_sha }}
+        path: .ado2gha-generated-4290d6a7f645
+        sparse-checkout: .github/actions
+        persist-credentials: false
+    - name: Inspect available build toolchain
+      env:
+        TESTRESULTSDIRECTORY: ${{ runner.temp }}/test-results
+      uses: ./.ado2gha-generated-4290d6a7f645/.github/actions/ado2gha-setup-toolchain-b8647f18a39d
+    - name: Prepare test result directory
+      run: |-
+        set -euo pipefail
+        mkdir -p "${TESTRESULTSDIRECTORY}"
+      shell: bash
+      env:
+        TESTRESULTSDIRECTORY: ${{ runner.temp }}/test-results
+    - name: Execute Integration tests
+      run: |-
+        if [ -x scripts/test-integration.sh ]; then
+          scripts/test-integration.sh
+        else
+          echo "No integration test script found; add scripts/test-integration.sh."
+        fi
+      shell: bash
+      env:
+        TESTRESULTSDIRECTORY: ${{ runner.temp }}/test-results
+    - name: Publish Integration tests results
+      if: ${{ !cancelled() }}
+      uses: dorny/test-reporter@v1
+      with:
+        name: Integration tests
+        path: ${{ env.TESTRESULTSDIRECTORY }}/**/*.trx
+        reporter: dotnet-trx
+        fail-on-error: 'false'
+      env:
+        TESTRESULTSDIRECTORY: ${{ runner.temp }}/test-results
+env:
+  VMIMAGE: ubuntu-latest
+  SOURCEARTIFACTNAME: BuildOutput
+  RELEASEARTIFACTNAME: ReleasePackage
+  RELEASEDIRECTORY: ${{ github.workspace }}/release
+  SYSTEM_DEBUG: 'false'
+  BUILDCONFIGURATION: ${{ github.event_name != 'workflow_dispatch' && 'Release' || fromJSON(inputs.ado_inputs).buildConfiguration }}

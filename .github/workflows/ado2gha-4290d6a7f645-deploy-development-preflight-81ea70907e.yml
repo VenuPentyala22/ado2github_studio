@@ -1,0 +1,38 @@
+name: Migrated job Deploy_Development_Preflight
+on:
+  workflow_call:
+    inputs:
+      ado_inputs:
+        type: string
+        required: true
+jobs:
+  Deploy_Development_Preflight:
+    name: Verify artifact and target readiness
+    runs-on: ubuntu-latest
+    steps:
+    - name: Download release package
+      uses: actions/download-artifact@v4
+      with:
+        name: ReleasePackage
+        path: ${{ env.RELEASEDIRECTORY }}
+      env:
+        TESTRESULTSDIRECTORY: ${{ runner.temp }}/test-results
+    - name: Fetch generated reusable actions
+      uses: actions/checkout@v4
+      with:
+        repository: ${{ github.repository }}
+        ref: ${{ github.workflow_sha }}
+        path: .ado2gha-generated-4290d6a7f645
+        sparse-checkout: .github/actions
+        persist-credentials: false
+    - name: Verify release checksum and metadata
+      env:
+        TESTRESULTSDIRECTORY: ${{ runner.temp }}/test-results
+      uses: ./.ado2gha-generated-4290d6a7f645/.github/actions/ado2gha-verify-artifact-b3b42763a781
+env:
+  VMIMAGE: ubuntu-latest
+  SOURCEARTIFACTNAME: BuildOutput
+  RELEASEARTIFACTNAME: ReleasePackage
+  RELEASEDIRECTORY: ${{ github.workspace }}/release
+  SYSTEM_DEBUG: 'false'
+  BUILDCONFIGURATION: ${{ github.event_name != 'workflow_dispatch' && 'Release' || fromJSON(inputs.ado_inputs).buildConfiguration }}

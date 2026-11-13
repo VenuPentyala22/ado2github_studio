@@ -1,0 +1,35 @@
+name: Migrated job Deploy_Production_Deploy
+on:
+  workflow_call:
+    inputs:
+      ado_inputs:
+        type: string
+        required: true
+jobs:
+  Deploy_Production_Deploy:
+    name: Deploy immutable package [ado2gha:Deploy_Production_Deploy]
+    runs-on: ubuntu-latest
+    environment: critical-app-production
+    steps:
+    - name: Download release package
+      uses: actions/download-artifact@v4
+      with:
+        name: ReleasePackage
+        path: ${{ env.RELEASEDIRECTORY }}
+      env:
+        TESTRESULTSDIRECTORY: ${{ runner.temp }}/test-results
+    - name: Execute deployment
+      run: |-
+        ${{ github.event_name != 'workflow_dispatch' && 'echo "Replace productionDeployCommand with the real deployment command."
+        echo "Deploying $(Pipeline.Workspace)/release to Production."
+        ' || fromJSON(inputs.ado_inputs).productionDeployCommand }}
+      shell: bash
+      env:
+        TESTRESULTSDIRECTORY: ${{ runner.temp }}/test-results
+env:
+  VMIMAGE: ubuntu-latest
+  SOURCEARTIFACTNAME: BuildOutput
+  RELEASEARTIFACTNAME: ReleasePackage
+  RELEASEDIRECTORY: ${{ github.workspace }}/release
+  SYSTEM_DEBUG: 'false'
+  BUILDCONFIGURATION: ${{ github.event_name != 'workflow_dispatch' && 'Release' || fromJSON(inputs.ado_inputs).buildConfiguration }}

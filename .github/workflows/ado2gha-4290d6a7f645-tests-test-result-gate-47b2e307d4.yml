@@ -1,0 +1,26 @@
+name: Migrated job Tests_Test_Result_Gate
+on:
+  workflow_call:
+    inputs:
+      ado_inputs:
+        type: string
+        required: true
+jobs:
+  Tests_Test_Result_Gate:
+    name: Fan-in test result gate
+    runs-on: ubuntu-latest
+    steps:
+    - name: Enforce all test dependencies
+      run: |-
+        set -euo pipefail
+        echo "All dependent test jobs completed successfully."
+      shell: bash
+      env:
+        TESTRESULTSDIRECTORY: ${{ runner.temp }}/test-results
+env:
+  VMIMAGE: ubuntu-latest
+  SOURCEARTIFACTNAME: BuildOutput
+  RELEASEARTIFACTNAME: ReleasePackage
+  RELEASEDIRECTORY: ${{ github.workspace }}/release
+  SYSTEM_DEBUG: 'false'
+  BUILDCONFIGURATION: ${{ github.event_name != 'workflow_dispatch' && 'Release' || fromJSON(inputs.ado_inputs).buildConfiguration }}

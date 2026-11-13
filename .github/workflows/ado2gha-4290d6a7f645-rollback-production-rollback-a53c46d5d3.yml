@@ -1,0 +1,34 @@
+name: Migrated job Rollback_Production_Rollback
+on:
+  workflow_call:
+    inputs:
+      ado_inputs:
+        type: string
+        required: true
+jobs:
+  Rollback_Production_Rollback:
+    name: Restore last known-good release [ado2gha:Rollback_Production_Rollback]
+    runs-on: ubuntu-latest
+    environment: critical-app-production
+    steps:
+    - name: Download artifacts
+      uses: actions/download-artifact@v4
+      with:
+        path: ${{ github.workspace }}
+      env:
+        TESTRESULTSDIRECTORY: ${{ runner.temp }}/test-results
+    - name: Execute idempotent rollback
+      run: |-
+        ${{ github.event_name != 'workflow_dispatch' && 'echo "Replace rollbackCommand with an idempotent rollback command."
+        echo "Rolling Production back to the last known-good release."
+        ' || fromJSON(inputs.ado_inputs).rollbackCommand }}
+      shell: bash
+      env:
+        TESTRESULTSDIRECTORY: ${{ runner.temp }}/test-results
+env:
+  VMIMAGE: ubuntu-latest
+  SOURCEARTIFACTNAME: BuildOutput
+  RELEASEARTIFACTNAME: ReleasePackage
+  RELEASEDIRECTORY: ${{ github.workspace }}/release
+  SYSTEM_DEBUG: 'false'
+  BUILDCONFIGURATION: ${{ github.event_name != 'workflow_dispatch' && 'Release' || fromJSON(inputs.ado_inputs).buildConfiguration }}

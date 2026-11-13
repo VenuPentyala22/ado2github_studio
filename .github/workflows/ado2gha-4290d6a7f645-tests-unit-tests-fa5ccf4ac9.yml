@@ -1,0 +1,69 @@
+name: Migrated job Tests_Unit_Tests
+on:
+  workflow_call:
+    inputs:
+      ado_inputs:
+        type: string
+        required: true
+jobs:
+  Tests_Unit_Tests:
+    name: Unit tests
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      checks: write
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 1
+        persist-credentials: false
+      env:
+        TESTRESULTSDIRECTORY: ${{ runner.temp }}/test-results
+    - name: Fetch generated reusable actions
+      uses: actions/checkout@v4
+      with:
+        repository: ${{ github.repository }}
+        ref: ${{ github.workflow_sha }}
+        path: .ado2gha-generated-4290d6a7f645
+        sparse-checkout: .github/actions
+        persist-credentials: false
+    - name: Inspect available build toolchain
+      env:
+        TESTRESULTSDIRECTORY: ${{ runner.temp }}/test-results
+      uses: ./.ado2gha-generated-4290d6a7f645/.github/actions/ado2gha-setup-toolchain-b8647f18a39d
+    - name: Prepare test result directory
+      run: |-
+        set -euo pipefail
+        mkdir -p "${TESTRESULTSDIRECTORY}"
+      shell: bash
+      env:
+        TESTRESULTSDIRECTORY: ${{ runner.temp }}/test-results
+    - name: Execute Unit tests
+      run: |-
+        if compgen -G "*.sln" > /dev/null; then
+          dotnet test --configuration "${BUILDCONFIGURATION}" --filter "Category=Unit" --logger "trx;LogFileName=unit.trx" --results-directory "${TESTRESULTSDIRECTORY}"
+        elif [ -f package.json ]; then
+          npm test -- --runInBand
+        else
+          echo "No unit-test framework detected; configure the Unit_Tests command in templates/stages/ci.yml."
+        fi
+      shell: bash
+      env:
+        TESTRESULTSDIRECTORY: ${{ runner.temp }}/test-results
+    - name: Publish Unit tests results
+      if: ${{ !cancelled() }}
+      uses: dorny/test-reporter@v1
+      with:
+        name: Unit tests
+        path: ${{ env.TESTRESULTSDIRECTORY }}/**/*.trx
+        reporter: dotnet-trx
+        fail-on-error: 'false'
+      env:
+        TESTRESULTSDIRECTORY: ${{ runner.temp }}/test-results
+env:
+  VMIMAGE: ubuntu-latest
+  SOURCEARTIFACTNAME: BuildOutput
+  RELEASEARTIFACTNAME: ReleasePackage
+  RELEASEDIRECTORY: ${{ github.workspace }}/release
+  SYSTEM_DEBUG: 'false'
+  BUILDCONFIGURATION: ${{ github.event_name != 'workflow_dispatch' && 'Release' || fromJSON(inputs.ado_inputs).buildConfiguration }}
