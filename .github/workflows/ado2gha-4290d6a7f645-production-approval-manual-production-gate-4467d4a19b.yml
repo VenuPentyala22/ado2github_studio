@@ -1,0 +1,28 @@
+name: Migrated job Production_Approval_Manual_Production_Gate
+on:
+  workflow_call:
+    inputs:
+      ado_inputs:
+        type: string
+        required: true
+jobs:
+  Production_Approval_Manual_Production_Gate:
+    name: Validate production change record
+    runs-on:
+    - self-hosted
+    - Linux
+    - server
+    timeout-minutes: 1440
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        persist-credentials: false
+      env:
+        TESTRESULTSDIRECTORY: ${{ runner.temp }}/test-results
+env:
+  VMIMAGE: ubuntu-latest
+  SOURCEARTIFACTNAME: BuildOutput
+  RELEASEARTIFACTNAME: ReleasePackage
+  RELEASEDIRECTORY: ${{ github.workspace }}/release
+  SYSTEM_DEBUG: 'false'
+  BUILDCONFIGURATION: ${{ github.event_name != 'workflow_dispatch' && 'Release' || fromJSON(inputs.ado_inputs).buildConfiguration }}

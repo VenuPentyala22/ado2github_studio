@@ -1,0 +1,14 @@
+name: Migrated setup-toolchain
+description: Reviewed component from Azure DevOps template templates/steps/setup-toolchain.yml
+runs:
+  using: composite
+  steps:
+  - run: |-
+      set -euo pipefail
+      echo "Agent: ${RUNNER_OS} / $(Agent.OSArchitecture)"
+      command -v git >/dev/null && git --version
+      command -v node >/dev/null && node --version || true
+      command -v npm >/dev/null && npm --version || true
+      command -v dotnet >/dev/null && dotnet --info | sed -n '1,20p' || true
+    shell: bash
+    id: execute
