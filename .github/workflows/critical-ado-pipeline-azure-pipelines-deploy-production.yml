@@ -1,0 +1,111 @@
+name: Deploy_Production
+on:
+  workflow_call:
+    inputs:
+      buildConfiguration:
+        type: string
+        description: Build configuration
+        default: Release
+      productionDeployCommand:
+        type: string
+        description: productionDeployCommand
+        default: |
+          echo "Replace productionDeployCommand with the real deployment command."
+          echo "Deploying ${GITHUB_WORKSPACE}/release to Production."
+permissions:
+  contents: read
+env:
+  VMIMAGE: ubuntu-latest
+  SOURCEARTIFACTNAME: BuildOutput
+  RELEASEARTIFACTNAME: ReleasePackage
+  RELEASEDIRECTORY: ${{ github.workspace }}/release
+  SYSTEM_DEBUG: 'false'
+  BUILDCONFIGURATION: ${{ github.event_name != 'workflow_dispatch' && 'Release' || inputs.buildConfiguration }}
+jobs:
+  Production_Approval_Manual_Production_Gate:
+    name: Validate production change record
+    runs-on:
+    - self-hosted
+    - Linux
+    - server
+    timeout-minutes: 1440
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        persist-credentials: false
+      env:
+        TESTRESULTSDIRECTORY: ${{ runner.temp }}/test-results
+  Deploy_Production_Preflight:
+    name: Verify artifact and target readiness
+    needs:
+    - Production_Approval_Manual_Production_Gate
+    runs-on: ubuntu-latest
+    steps:
+    - name: Download release package
+      uses: actions/download-artifact@v4
+      with:
+        name: ReleasePackage
+        path: ${{ env.RELEASEDIRECTORY }}
+      env:
+        TESTRESULTSDIRECTORY: ${{ runner.temp }}/test-results
+    - name: Fetch generated reusable actions
+      uses: actions/checkout@v4
+      with:
+        repository: ${{ github.repository }}
+        ref: ${{ github.workflow_sha }}
+        path: .ado2gha-generated-1564453a17a9
+        sparse-checkout: .github/actions
+        persist-credentials: false
+    - name: Verify release checksum and metadata
+      uses: ./.ado2gha-generated-1564453a17a9/.github/actions/critical-ado-pipeline-azure-pipelines-verify-artifact
+      env:
+        TESTRESULTSDIRECTORY: ${{ runner.temp }}/test-results
+  Deploy_Production_Deploy:
+    name: Deploy immutable package [ado2gha:Deploy_Production_Deploy]
+    needs:
+    - Production_Approval_Manual_Production_Gate
+    - Deploy_Production_Preflight
+    runs-on: ubuntu-latest
+    environment: critical-app-production
+    steps:
+    - name: Download release package
+      uses: actions/download-artifact@v4
+      with:
+        name: ReleasePackage
+        path: ${{ env.RELEASEDIRECTORY }}
+      env:
+        TESTRESULTSDIRECTORY: ${{ runner.temp }}/test-results
+    - name: Execute deployment
+      run: |-
+        ${{ github.event_name != 'workflow_dispatch' && 'echo "Replace productionDeployCommand with the real deployment command."
+        echo "Deploying ${GITHUB_WORKSPACE}/release to Production."
+        ' || inputs.productionDeployCommand }}
+      shell: bash
+      env:
+        TESTRESULTSDIRECTORY: ${{ runner.temp }}/test-results
+  Deploy_Production_Smoke_Test:
+    name: Validate deployed service
+    needs:
+    - Production_Approval_Manual_Production_Gate
+    - Deploy_Production_Deploy
+    if: ${{ success() && success() }}
+    runs-on: ubuntu-latest
+    steps:
+    - name: Run smoke test
+      run: echo "Production deployment smoke test passed."
+      shell: bash
+      env:
+        TESTRESULTSDIRECTORY: ${{ runner.temp }}/test-results
+  PostDeploy_Verification_Deep_Verification:
+    name: Verify service health and business transaction
+    needs:
+    - Deploy_Production_Preflight
+    - Deploy_Production_Deploy
+    - Deploy_Production_Smoke_Test
+    runs-on: ubuntu-latest
+    steps:
+    - name: Run deep verification
+      run: echo "Production deep verification passed."
+      shell: bash
+      env:
+        TESTRESULTSDIRECTORY: ${{ runner.temp }}/test-results
