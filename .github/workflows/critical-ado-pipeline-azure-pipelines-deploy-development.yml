@@ -1,0 +1,81 @@
+name: Deploy_Development
+on:
+  workflow_call:
+    inputs:
+      buildConfiguration:
+        type: string
+        description: Build configuration
+        default: Release
+      devDeployCommand:
+        type: string
+        description: devDeployCommand
+        default: |
+          echo "Replace devDeployCommand with the real deployment command."
+          echo "Deploying ${GITHUB_WORKSPACE}/release to Development."
+permissions:
+  contents: read
+env:
+  VMIMAGE: ubuntu-latest
+  SOURCEARTIFACTNAME: BuildOutput
+  RELEASEARTIFACTNAME: ReleasePackage
+  RELEASEDIRECTORY: ${{ github.workspace }}/release
+  SYSTEM_DEBUG: 'false'
+  BUILDCONFIGURATION: ${{ github.event_name != 'workflow_dispatch' && 'Release' || inputs.buildConfiguration }}
+jobs:
+  Deploy_Development_Preflight:
+    name: Verify artifact and target readiness
+    runs-on: ubuntu-latest
+    steps:
+    - name: Download release package
+      uses: actions/download-artifact@v4
+      with:
+        name: ReleasePackage
+        path: ${{ env.RELEASEDIRECTORY }}
+      env:
+        TESTRESULTSDIRECTORY: ${{ runner.temp }}/test-results
+    - name: Fetch generated reusable actions
+      uses: actions/checkout@v4
+      with:
+        repository: ${{ github.repository }}
+        ref: ${{ github.workflow_sha }}
+        path: .ado2gha-generated-1564453a17a9
+        sparse-checkout: .github/actions
+        persist-credentials: false
+    - name: Verify release checksum and metadata
+      uses: ./.ado2gha-generated-1564453a17a9/.github/actions/critical-ado-pipeline-azure-pipelines-verify-artifact
+      env:
+        TESTRESULTSDIRECTORY: ${{ runner.temp }}/test-results
+  Deploy_Development_Deploy:
+    name: Deploy immutable package [ado2gha:Deploy_Development_Deploy]
+    needs:
+    - Deploy_Development_Preflight
+    runs-on: ubuntu-latest
+    environment: critical-app-development
+    steps:
+    - name: Download release package
+      uses: actions/download-artifact@v4
+      with:
+        name: ReleasePackage
+        path: ${{ env.RELEASEDIRECTORY }}
+      env:
+        TESTRESULTSDIRECTORY: ${{ runner.temp }}/test-results
+    - name: Execute deployment
+      run: |-
+        ${{ github.event_name != 'workflow_dispatch' && 'echo "Replace devDeployCommand with the real deployment command."
+        echo "Deploying ${GITHUB_WORKSPACE}/release to Development."
+        ' || inputs.devDeployCommand }}
+      shell: bash
+      env:
+        TESTRESULTSDIRECTORY: ${{ runner.temp }}/test-results
+  Deploy_Development_Smoke_Test:
+    name: Validate deployed service
+    needs:
+    - Deploy_Development_Deploy
+    if: ${{ success() && success() }}
+    runs-on: ubuntu-latest
+    steps:
+    - name: Run smoke test
+      run: echo "Development smoke test passed."
+      shell: bash
+      env:
+        TESTRESULTSDIRECTORY: ${{ runner.temp }}/test-results

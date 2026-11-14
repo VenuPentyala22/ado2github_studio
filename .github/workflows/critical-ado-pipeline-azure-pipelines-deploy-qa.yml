@@ -1,0 +1,81 @@
+name: Deploy_QA
+on:
+  workflow_call:
+    inputs:
+      buildConfiguration:
+        type: string
+        description: Build configuration
+        default: Release
+      qaDeployCommand:
+        type: string
+        description: qaDeployCommand
+        default: |
+          echo "Replace qaDeployCommand with the real deployment command."
+          echo "Deploying ${GITHUB_WORKSPACE}/release to QA."
+permissions:
+  contents: read
+env:
+  VMIMAGE: ubuntu-latest
+  SOURCEARTIFACTNAME: BuildOutput
+  RELEASEARTIFACTNAME: ReleasePackage
+  RELEASEDIRECTORY: ${{ github.workspace }}/release
+  SYSTEM_DEBUG: 'false'
+  BUILDCONFIGURATION: ${{ github.event_name != 'workflow_dispatch' && 'Release' || inputs.buildConfiguration }}
+jobs:
+  Deploy_QA_Preflight:
+    name: Verify artifact and target readiness
+    runs-on: ubuntu-latest
+    steps:
+    - name: Download release package
+      uses: actions/download-artifact@v4
+      with:
+        name: ReleasePackage
+        path: ${{ env.RELEASEDIRECTORY }}
+      env:
+        TESTRESULTSDIRECTORY: ${{ runner.temp }}/test-results
+    - name: Fetch generated reusable actions
+      uses: actions/checkout@v4
+      with:
+        repository: ${{ github.repository }}
+        ref: ${{ github.workflow_sha }}
+        path: .ado2gha-generated-1564453a17a9
+        sparse-checkout: .github/actions
+        persist-credentials: false
+    - name: Verify release checksum and metadata
+      uses: ./.ado2gha-generated-1564453a17a9/.github/actions/critical-ado-pipeline-azure-pipelines-verify-artifact
+      env:
+        TESTRESULTSDIRECTORY: ${{ runner.temp }}/test-results
+  Deploy_QA_Deploy:
+    name: Deploy immutable package [ado2gha:Deploy_QA_Deploy]
+    needs:
+    - Deploy_QA_Preflight
+    runs-on: ubuntu-latest
+    environment: critical-app-qa
+    steps:
+    - name: Download release package
+      uses: actions/download-artifact@v4
+      with:
+        name: ReleasePackage
+        path: ${{ env.RELEASEDIRECTORY }}
+      env:
+        TESTRESULTSDIRECTORY: ${{ runner.temp }}/test-results
+    - name: Execute deployment
+      run: |-
+        ${{ github.event_name != 'workflow_dispatch' && 'echo "Replace qaDeployCommand with the real deployment command."
+        echo "Deploying ${GITHUB_WORKSPACE}/release to QA."
+        ' || inputs.qaDeployCommand }}
+      shell: bash
+      env:
+        TESTRESULTSDIRECTORY: ${{ runner.temp }}/test-results
+  Deploy_QA_Smoke_Test:
+    name: Validate deployed service
+    needs:
+    - Deploy_QA_Deploy
+    if: ${{ success() && success() }}
+    runs-on: ubuntu-latest
+    steps:
+    - name: Run smoke test
+      run: echo "QA smoke test passed."
+      shell: bash
+      env:
+        TESTRESULTSDIRECTORY: ${{ runner.temp }}/test-results
